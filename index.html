@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>一封信</title>
 <style>
-  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
   @import url('https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&display=swap');
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
     font-family: "Noto Serif SC", "Source Han Serif SC", "STSong", "SimSun", serif;
@@ -89,23 +89,18 @@
   #password-gate .gate-title {
     font-size: 18px; letter-spacing: 6px; color: #c8b898; font-weight: 400;
   }
-  /* 字母格 */
-  #gate-letter-row {
-    display: flex; gap: 8px; justify-content: center;
-  }
-  .gate-letter-box {
-    width: 36px; height: 44px;
+  .gate-input {
+    width: 180px; padding: 10px 0;
     background: transparent;
     border: none;
     border-bottom: 2px solid rgba(200,180,150,0.35);
     border-radius: 0;
-    color: #d4c8b8; font-size: 24px; font-family: inherit;
-    text-align: center; caret-color: transparent;
+    color: #d4c8b8; font-size: 20px; font-family: inherit;
+    text-align: center; letter-spacing: 8px;
     outline: none; transition: border-color 0.3s;
-    text-transform: lowercase; padding: 0;
   }
-  .gate-letter-box:focus { border-bottom-color: rgba(200,180,150,0.7); }
-  .gate-letter-box.filled { border-bottom-color: rgba(200,180,150,0.55); }
+  .gate-input::placeholder { color: rgba(200,180,150,0.25); letter-spacing: 2px; }
+  .gate-input:focus { border-bottom-color: rgba(200,180,150,0.7); }
   #password-gate .gate-hint {
     font-size: 13px; color: rgba(200,180,150,0.45);
     letter-spacing: 2px; max-width: 280px; text-align: center;
@@ -313,12 +308,7 @@
     </svg>
   </div>
   <div class="gate-title">请输入密码</div>
-  <div id="gate-letter-row">
-    <input type="text" class="gate-letter-box" maxlength="1" inputmode="latin" x-inputmode="latin" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" lang="en">
-    <input type="text" class="gate-letter-box" maxlength="1" inputmode="latin" x-inputmode="latin" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" lang="en">
-    <input type="text" class="gate-letter-box" maxlength="1" inputmode="latin" x-inputmode="latin" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" lang="en">
-    <input type="text" class="gate-letter-box" maxlength="1" inputmode="latin" x-inputmode="latin" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" lang="en">
-  </div>
+  <input type="text" id="gate-word" class="gate-input" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="输入密码">
   <div class="gate-hint">这些数字代表的是什么字母呢</div>
   <div class="gate-error" id="gate-error"></div>
   <button class="gate-submit" id="gate-submit">确 认</button>
@@ -984,7 +974,7 @@ const bgDeco = document.getElementById('bg-deco');
 
 // Password gate DOM
 const passwordGate = document.getElementById('password-gate');
-const gateLetterBoxes = document.querySelectorAll('.gate-letter-box');
+const gateWord = document.getElementById('gate-word');
 const gateError = document.getElementById('gate-error');
 const gateSubmit = document.getElementById('gate-submit');
 const gateClose = document.getElementById('gate-close');
@@ -1071,44 +1061,7 @@ function fadeToMusic(src, ch, callback) {
 }
 
 // ===== 密码门 =====
-// 字母格输入
-let composing = false;
-gateLetterBoxes.forEach((box, idx) => {
-  box.addEventListener('compositionstart', () => { composing = true; });
-  box.addEventListener('compositionend', function() {
-    composing = false;
-    // 输入法确认后处理
-    const v = this.value.replace(/[^a-zA-Z]/g, '');
-    this.value = v ? v.slice(-1).toLowerCase() : '';
-    this.classList.toggle('filled', !!this.value);
-    if (this.value && idx < gateLetterBoxes.length - 1) gateLetterBoxes[idx + 1].focus();
-  });
-  box.addEventListener('input', function() {
-    if (composing) return; // 组合中不处理
-    const v = this.value.replace(/[^a-zA-Z]/g, '');
-    this.value = v ? v.slice(-1).toLowerCase() : '';
-    this.classList.toggle('filled', !!this.value);
-    if (this.value && idx < gateLetterBoxes.length - 1) gateLetterBoxes[idx + 1].focus();
-  });
-  box.addEventListener('keydown', function(e) {
-    if (e.key === 'Backspace' && !this.value && idx > 0) {
-      gateLetterBoxes[idx - 1].focus();
-      gateLetterBoxes[idx - 1].value = '';
-      gateLetterBoxes[idx - 1].classList.remove('filled');
-    }
-    if (e.key === 'Enter') checkPassword();
-  });
-  box.addEventListener('focus', function() { this.select(); });
-});
-
-function getGateValue() {
-  let v = '';
-  gateLetterBoxes.forEach(b => v += b.value);
-  return v;
-}
-
 function showPasswordGate() {
-  // 音乐缓出
   if (currentAudio && !currentAudio.paused) {
     let vol = currentAudio.volume;
     const step = vol / 20;
@@ -1123,32 +1076,36 @@ function showPasswordGate() {
     }, 50);
   }
   passwordGate.classList.remove('hidden');
-  gateLetterBoxes.forEach(b => { b.value = ''; b.classList.remove('filled'); });
+  gateWord.value = '';
   gateError.style.opacity = '0';
-  setTimeout(() => gateLetterBoxes[0].focus(), 300);
+  setTimeout(() => gateWord.focus(), 300);
 }
 
 function hidePasswordGate() {
   passwordGate.classList.add('hidden');
 }
 
+gateWord.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') checkPassword();
+});
+
 gateSubmit.addEventListener('click', checkPassword);
 gateClose.addEventListener('click', () => {
   hidePasswordGate();
-  renderChapter(1); // 回到信·序
+  renderChapter(1);
 });
 
 function checkPassword() {
-  if (getGateValue() === CORRECT_PASSWORD) {
+  if (gateWord.value.trim().toLowerCase() === CORRECT_PASSWORD) {
     passwordUnlocked = true;
     gateError.style.opacity = '0';
     hidePasswordGate();
-    renderChapter(2); // 进入童年
+    renderChapter(2);
   } else {
     gateError.textContent = '不对哦，再想想';
     gateError.style.opacity = '1';
-    gateLetterBoxes.forEach(b => { b.value = ''; b.classList.remove('filled'); });
-    gateLetterBoxes[0].focus();
+    gateWord.value = '';
+    gateWord.focus();
   }
 }
 
