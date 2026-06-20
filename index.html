@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>一封信</title>
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -312,10 +312,10 @@
   </div>
   <div class="gate-title">请输入密码</div>
   <div id="gate-letter-row">
-    <input type="text" class="gate-letter-box" maxlength="1" autocomplete="off">
-    <input type="text" class="gate-letter-box" maxlength="1" autocomplete="off">
-    <input type="text" class="gate-letter-box" maxlength="1" autocomplete="off">
-    <input type="text" class="gate-letter-box" maxlength="1" autocomplete="off">
+    <input type="text" class="gate-letter-box" maxlength="1" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <input type="text" class="gate-letter-box" maxlength="1" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <input type="text" class="gate-letter-box" maxlength="1" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <input type="text" class="gate-letter-box" maxlength="1" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
   </div>
   <div class="gate-hint">这些数字代表的是什么字母呢</div>
   <div class="gate-error" id="gate-error"></div>
@@ -1070,8 +1070,19 @@ function fadeToMusic(src, ch, callback) {
 
 // ===== 密码门 =====
 // 字母格输入
+let composing = false;
 gateLetterBoxes.forEach((box, idx) => {
+  box.addEventListener('compositionstart', () => { composing = true; });
+  box.addEventListener('compositionend', function() {
+    composing = false;
+    // 输入法确认后处理
+    const v = this.value.replace(/[^a-zA-Z]/g, '');
+    this.value = v ? v.slice(-1).toLowerCase() : '';
+    this.classList.toggle('filled', !!this.value);
+    if (this.value && idx < gateLetterBoxes.length - 1) gateLetterBoxes[idx + 1].focus();
+  });
   box.addEventListener('input', function() {
+    if (composing) return; // 组合中不处理
     const v = this.value.replace(/[^a-zA-Z]/g, '');
     this.value = v ? v.slice(-1).toLowerCase() : '';
     this.classList.toggle('filled', !!this.value);
