@@ -55,6 +55,12 @@
     cursor: pointer; transition: opacity 0.6s ease;
   }
   #play-overlay.hidden { opacity: 0; pointer-events: none; }
+  #play-overlay .ios-hint {
+    position: absolute; top: 28px; left: 0; right: 0;
+    text-align: center; color: rgba(255,255,255,0.45);
+    font-size: 12px; letter-spacing: 1px;
+    padding: 0 20px; font-family: inherit;
+  }
   #play-overlay .play-hint {
     text-align: center; color: rgba(255,255,255,0.75);
     font-size: 15px; letter-spacing: 4px;
@@ -294,6 +300,7 @@
 <body>
 
 <div id="play-overlay">
+  <div class="ios-hint">苹果端的音乐和画面衔接可能不完美，推荐电脑/安卓阅读哦~</div>
   <div class="play-hint">轻点任意处 开始阅读</div>
 </div>
 
