@@ -1111,17 +1111,18 @@ function fadeToMusic(src, ch, callback) {
     a.play().then(() => { startedPlaying = true; }).catch(() => {});
     musicBtn.classList.remove('loading', 'buffering');
 
-    // 渐入（1.5s rAF）
+    // 渐入（1.5s setTimeout）
     const target = volumeSlider.value / 100;
-    const start = performance.now();
+    const steps = 15;
+    let i = 0;
     const tick = () => {
       if (thisLoadId !== musicLoadId) return;
-      const v = Math.min(target, target * ((performance.now() - start) / 1500));
-      a.volume = v;
-      if (v < target) { requestAnimationFrame(tick); }
+      i++;
+      a.volume = Math.min(target, target * (i / steps));
+      if (i < steps) { setTimeout(tick, 100); }
       else { musicBtn.classList.remove('paused'); if (callback) callback(); }
     };
-    requestAnimationFrame(tick);
+    tick();
 
     // 中途缓冲
     a.addEventListener('waiting', () => {
@@ -1162,7 +1163,7 @@ function fadeToMusic(src, ch, callback) {
   if (!cached) { fetchAudioBlob(src).catch(() => {}); }
 }
 
-// ── 淡出音频（rAF，1s）──
+// ── 淡出音频（setTimeout，1s）──
 function fadeOutAudio(audio, onDone) {
   if (!audio || audio.paused) {
     if (audio) { audio.pause(); audio.src = ''; }
@@ -1170,30 +1171,22 @@ function fadeOutAudio(audio, onDone) {
     return;
   }
   const startVol = audio.volume;
-  const startTime = performance.now();
+  const steps = 10;
+  let i = 0;
   const tick = () => {
-    const p = Math.min(1, (performance.now() - startTime) / 1000);
-    audio.volume = startVol * (1 - p);
-    if (p < 1) { requestAnimationFrame(tick); }
+    i++;
+    audio.volume = Math.max(0, startVol * (1 - i / steps));
+    if (i < steps) { setTimeout(tick, 100); }
     else { audio.pause(); audio.src = ''; if (onDone) onDone(); }
   };
-  requestAnimationFrame(tick);
+  tick();
 }
 
 // ===== 密码门 =====
 function showPasswordGate() {
   if (currentAudio && !currentAudio.paused) {
-    let vol = currentAudio.volume;
-    const step = vol / 20;
-    const fadeOut = setInterval(() => {
-      vol = Math.max(0, vol - step);
-      currentAudio.volume = vol;
-      if (vol <= 0) {
-        clearInterval(fadeOut);
-        currentAudio.pause();
-        musicBtn.classList.add('paused');
-      }
-    }, 50);
+    fadeOutAudio(currentAudio, () => { musicBtn.classList.add('paused'); });
+    currentAudio = null;
   }
   passwordGate.classList.remove('hidden');
   gateWord.value = '';
