@@ -1091,14 +1091,28 @@ function fadeToMusic(src, ch, callback) {
   musicLoadId++;
   const thisLoadId = musicLoadId;
 
-  // ★ 立即停止旧音乐（不淡出，避免 iOS 音量控制无效 + 重叠播放）
-  if (currentAudio) {
+  // 停止旧音乐：非iOS 淡出，iOS 直接停
+  clearInterval(musicFadeTimer);
+  if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
+
+  if (currentAudio && !currentAudio.paused && !isIOS) {
+    // 安卓/桌面：淡出旧音乐
+    const old = currentAudio;
+    currentAudio = null;
+    let vol = old.volume;
+    const fadeStep = Math.max(vol / 18, 0.01);
+    musicFadeTimer = setInterval(() => {
+      if (thisLoadId !== musicLoadId) { clearInterval(musicFadeTimer); old.pause(); old.src = ''; return; }
+      vol = Math.max(0, vol - fadeStep);
+      old.volume = vol;
+      if (vol <= 0) { clearInterval(musicFadeTimer); old.pause(); old.src = ''; }
+    }, 40);
+  } else if (currentAudio) {
+    // iOS：直接停
     currentAudio.pause();
     currentAudio.src = '';
     currentAudio = null;
   }
-  clearInterval(musicFadeTimer);
-  if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
 
   if (!src) { if (callback) callback(); return; }
 
