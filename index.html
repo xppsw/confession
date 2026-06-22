@@ -985,6 +985,41 @@ let musicFadeTimer = null;
 let musicLoadId = 0;
 let musicTimeoutId = null;
 
+// ===== 音频预加载缓存（Blob URL，播放零卡顿）=====
+const audioCache = new Map(); // src → { blobUrl, blob }
+const audioFetching = new Map(); // src → Promise (防止重复fetch)
+
+async function fetchAudioBlob(src) {
+  if (audioCache.has(src)) return audioCache.get(src).blobUrl;
+  if (audioFetching.has(src)) return audioFetching.get(src);
+  const p = fetch(src).then(r => {
+    if (!r.ok) throw new Error('fetch failed');
+    return r.blob();
+  }).then(blob => {
+    const blobUrl = URL.createObjectURL(blob);
+    audioCache.set(src, { blobUrl, blob });
+    audioFetching.delete(src);
+    return blobUrl;
+  }).catch(e => {
+    audioFetching.delete(src);
+    throw e;
+  });
+  audioFetching.set(src, p);
+  return p;
+}
+
+function preloadChapterAudio(index) {
+  const ch = chapters[index];
+  if (!ch || !ch.music) return;
+  fetchAudioBlob(ch.music).catch(() => {});
+}
+
+window.addEventListener('beforeunload', () => {
+  audioCache.forEach(({ blobUrl }) => URL.revokeObjectURL(blobUrl));
+  audioCache.clear();
+  audioFetching.clear();
+});
+
 // ===== DOM =====
 const chapterView = document.getElementById('chapter-view');
 const chapterInner = document.getElementById('chapter-inner');
@@ -1047,52 +1082,66 @@ function applyTheme(theme) {
   }
 }
 
-// ===== 音乐切换（渐弱+渐入）=====
+// ===== 音乐切换（fetch Blob → 零卡顿交叉淡入淡出）=====
 function fadeToMusic(src, ch, callback) {
   if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
   clearInterval(musicFadeTimer);
   musicLoadId++;
   const thisLoadId = musicLoadId;
 
-  // 渐弱旧音乐
-  if (currentAudio && !currentAudio.paused) {
-    const old = currentAudio;
-    currentAudio = null;
-    let vol = old.volume;
-    const fadeStep = Math.max(vol / 18, 0.01);
-    musicFadeTimer = setInterval(() => {
-      if (thisLoadId !== musicLoadId) {
-        clearInterval(musicFadeTimer);
-        old.pause(); old.src = '';
-        return;
-      }
-      vol = Math.max(0, vol - fadeStep);
-      old.volume = vol;
-      if (vol <= 0) {
-        clearInterval(musicFadeTimer);
-        old.pause(); old.src = '';
-      }
-    }, 40);
-  } else if (currentAudio) {
-    currentAudio.pause();
-    currentAudio.src = '';
-    currentAudio = null;
+  if (!src) {
+    // 无新音乐，渐弱旧音乐后停止
+    if (currentAudio && !currentAudio.paused) {
+      const old = currentAudio;
+      currentAudio = null;
+      let vol = old.volume;
+      const step = Math.max(vol / 18, 0.01);
+      musicFadeTimer = setInterval(() => {
+        vol = Math.max(0, vol - step);
+        old.volume = vol;
+        if (vol <= 0) { clearInterval(musicFadeTimer); old.pause(); old.src = ''; }
+      }, 40);
+    }
+    if (callback) callback();
+    return;
   }
 
-  if (!src) { currentAudio = null; if (callback) callback(); return; }
+  // 显示加载中（fetch 可能需几秒）
+  musicBtn.classList.add('loading');
 
-  const a = new Audio();
-  a.loop = true; a.volume = 0;
-  a.preload = 'auto';
-  a.crossOrigin = 'anonymous';
-  let startedPlaying = false;
+  // 异步下载完整音频文件 → Blob URL（从内存播放，零卡顿）
+  fetchAudioBlob(src).then(blobUrl => {
+    if (thisLoadId !== musicLoadId) return;
 
-  const doPlay = () => {
-    if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-    if (canplayFallback) { clearTimeout(canplayFallback); canplayFallback = null; }
-    a.play().then(() => { startedPlaying = true; }).catch(() => {});
+    const a = new Audio(blobUrl);
+    a.loop = true;
+    a.volume = 0;
+
+    // ── 交叉淡入淡出：旧渐弱 + 新渐入 同时进行 ──
+    const old = currentAudio;
     currentAudio = a;
+
+    // 渐弱旧音乐（如果还在播）
+    if (old && !old.paused) {
+      let vol = old.volume;
+      const step = Math.max(vol / 18, 0.01);
+      const fadeOut = setInterval(() => {
+        vol = Math.max(0, vol - step);
+        old.volume = vol;
+        if (vol <= 0) {
+          clearInterval(fadeOut);
+          old.pause(); old.src = '';
+        }
+      }, 40);
+    } else if (old) {
+      old.pause(); old.src = '';
+    }
+
+    // 播放新音乐
+    a.play().catch(() => {});
     musicBtn.classList.remove('loading', 'buffering');
+
+    // 渐入新音乐
     let v = 0;
     const target = volumeSlider.value / 100;
     const step = Math.max(target / 30, 0.005);
@@ -1102,49 +1151,14 @@ function fadeToMusic(src, ch, callback) {
       a.volume = v;
       if (v >= target) { clearInterval(fadeIn); musicBtn.classList.remove('paused'); if (callback) callback(); }
     }, 50);
-  };
-
-  // ── canplay 就开播（快），10s 兜底 ──
-  let canplayFallback = null;
-  let started = false;
-  const onReady = () => {
-    if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-    if (started) return;
-    started = true;
-    doPlay();
-  };
-  a.addEventListener('canplay', onReady, { once: true });
-  canplayFallback = setTimeout(() => { if (!started) onReady(); }, 10000);
-
-  // ── 播放中途缓冲耗尽 → 浏览器自动暂停/恢复，我只管状态 ──
-  a.addEventListener('waiting', () => {
+  }).catch(() => {
     if (thisLoadId !== musicLoadId) return;
-    if (startedPlaying) musicBtn.classList.add('buffering');
-  });
-  a.addEventListener('playing', () => {
-    if (thisLoadId !== musicLoadId) return;
-    musicBtn.classList.remove('buffering');
-  });
-  a.addEventListener('suspend', () => {
-    // 浏览器主动暂停下载（缓冲够了），说明当前不卡
-    if (thisLoadId !== musicLoadId) return;
-    musicBtn.classList.remove('buffering');
-  });
-
-  // 错误处理
-  a.addEventListener('error', () => {
-    if (thisLoadId !== musicLoadId) return;
-    clearTimeout(canplayFallback);
-    musicBtn.classList.remove('loading', 'buffering');
+    musicBtn.classList.remove('loading');
     musicBtn.classList.add('paused');
     console.warn('音乐加载失败:', src);
     currentAudio = null;
     if (callback) callback();
-  }, { once: true });
-
-  musicBtn.classList.add('loading');
-  a.src = src;
-  a.load();
+  });
 }
 
 // ===== 密码门 =====
@@ -1252,6 +1266,10 @@ function renderChapter(index) {
   nowPlaying.textContent = ch.musicLabel;
   nextBtn.classList.remove('glow-hint');
   glowHintShown = false;
+
+  // 预加载相邻章节音频
+  if (index + 1 < chapters.length) preloadChapterAudio(index + 1);
+  if (index - 1 >= 0) preloadChapterAudio(index - 1);
 }
 
 // ===== 导航 =====
