@@ -1086,149 +1086,79 @@ function applyTheme(theme) {
   }
 }
 
-// ===== 音乐切换（iOS 和 安卓/桌面 分开处理）=====
+// ===== 音乐切换 =====
 function fadeToMusic(src, ch, callback) {
-  if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
-  clearInterval(musicFadeTimer);
   musicLoadId++;
   const thisLoadId = musicLoadId;
 
-  if (!src) { currentAudio = null; if (callback) callback(); return; }
-
-  const cached = audioCache.get(src);
-  const audioSrc = cached ? cached.blobUrl : src;
-
-  if (isIOS) {
-    // ── iOS：淡出旧音乐（setInterval 在 canplay 前就跑完），新音乐直接满音量 ──
-    if (currentAudio && !currentAudio.paused) {
-      const old = currentAudio;
-      currentAudio = null;
-      let vol = old.volume;
-      const fadeStep = Math.max(vol / 18, 0.01);
-      musicFadeTimer = setInterval(() => {
-        if (thisLoadId !== musicLoadId) {
-          clearInterval(musicFadeTimer);
-          old.pause(); old.src = '';
-          return;
-        }
-        vol = Math.max(0, vol - fadeStep);
-        old.volume = vol;
-        if (vol <= 0) {
-          clearInterval(musicFadeTimer);
-          old.pause(); old.src = '';
-        }
-      }, 40);
-    } else if (currentAudio) {
-      currentAudio.pause(); currentAudio.src = '';
-      currentAudio = null;
-    }
-
-    const a = new Audio(audioSrc);
-    a.loop = true; a.volume = 0;
-    a.preload = 'auto';
-
-    const doPlay = () => {
-      if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-      musicTimeoutId = null;
-      a.play().catch(() => {});
-      currentAudio = a;
-      musicBtn.classList.remove('loading', 'buffering', 'paused');
-      // 直接满音量，不做淡入（iOS 加载慢，淡入更拖沓）
-      a.volume = volumeSlider.value / 100;
-      if (callback) callback();
-    };
-
-    let canplayFallback = null;
-    let started = false;
-    a.addEventListener('canplay', () => {
-      if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-      if (started) return; started = true;
-      clearTimeout(canplayFallback);
-      doPlay();
-    }, { once: true });
-    canplayFallback = setTimeout(() => { if (!started) doPlay(); }, 10000);
-
-    a.addEventListener('error', () => {
-      if (thisLoadId !== musicLoadId) return;
-      clearTimeout(canplayFallback);
-      musicBtn.classList.remove('loading'); musicBtn.classList.add('paused');
-      currentAudio = null; if (callback) callback();
-    }, { once: true });
-
-    if (!cached) musicBtn.classList.add('loading');
-    a.src = audioSrc; a.load();
-    if (!cached) { fetchAudioBlob(src).catch(() => {}); }
-    return;
-  }
-
-  // ── 安卓/桌面：完整交叉淡入淡出 ──
-  // 渐弱旧音乐
-  if (currentAudio && !currentAudio.paused) {
-    const old = currentAudio;
-    currentAudio = null;
-    let vol = old.volume;
-    const fadeStep = Math.max(vol / 18, 0.01);
-    musicFadeTimer = setInterval(() => {
-      if (thisLoadId !== musicLoadId) {
-        clearInterval(musicFadeTimer);
-        old.pause(); old.src = '';
-        return;
-      }
-      vol = Math.max(0, vol - fadeStep);
-      old.volume = vol;
-      if (vol <= 0) {
-        clearInterval(musicFadeTimer);
-        old.pause(); old.src = '';
-      }
-    }, 40);
-  } else if (currentAudio) {
+  // ★ 立即停止旧音乐（不淡出，避免 iOS 音量控制无效 + 重叠播放）
+  if (currentAudio) {
     currentAudio.pause();
     currentAudio.src = '';
     currentAudio = null;
   }
+  clearInterval(musicFadeTimer);
+  if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
+
+  if (!src) { if (callback) callback(); return; }
+
+  const cached = audioCache.get(src);
+  const audioSrc = cached ? cached.blobUrl : src;
 
   const a = new Audio(audioSrc);
   a.loop = true; a.volume = 0;
   a.preload = 'auto';
 
-  const doPlay = () => {
+  const startPlay = () => {
     if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
     musicTimeoutId = null;
     a.play().catch(() => {});
     currentAudio = a;
     musicBtn.classList.remove('loading', 'buffering');
-    let v = 0;
-    const target = volumeSlider.value / 100;
-    const step = Math.max(target / 30, 0.005);
-    const fadeIn = setInterval(() => {
-      if (thisLoadId !== musicLoadId) { clearInterval(fadeIn); return; }
-      v = Math.min(target, v + step);
-      a.volume = v;
-      if (v >= target) { clearInterval(fadeIn); musicBtn.classList.remove('paused'); if (callback) callback(); }
-    }, 50);
+
+    if (isIOS) {
+      // iOS：直接满音量，不做淡入（加载慢，淡入更拖沓）
+      a.volume = volumeSlider.value / 100;
+      musicBtn.classList.remove('paused');
+      if (callback) callback();
+    } else {
+      // 安卓/桌面：淡入（1.5s）
+      let v = 0;
+      const target = volumeSlider.value / 100;
+      const step = Math.max(target / 30, 0.005);
+      const fadeIn = setInterval(() => {
+        if (thisLoadId !== musicLoadId) { clearInterval(fadeIn); return; }
+        v = Math.min(target, v + step);
+        a.volume = v;
+        if (v >= target) { clearInterval(fadeIn); musicBtn.classList.remove('paused'); if (callback) callback(); }
+      }, 50);
+    }
   };
 
+  // canplay 后开播（iOS 旧音乐已停，新音乐等缓冲好了再播）
   let canplayFallback = null;
   let started = false;
-  a.addEventListener('canplay', () => {
+  const onReady = () => {
     if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
     if (started) return; started = true;
-    doPlay();
-  }, { once: true });
-  canplayFallback = setTimeout(() => { if (!started) doPlay(); }, 10000);
+    clearTimeout(canplayFallback);
+    startPlay();
+  };
+  a.addEventListener('canplay', onReady, { once: true });
+  canplayFallback = setTimeout(onReady, 10000);
 
+  // 缓冲事件（仅非iOS，iOS跳过）
   let startedPlaying = false;
   a.addEventListener('waiting', () => {
-    if (thisLoadId !== musicLoadId) return;
+    if (thisLoadId !== musicLoadId || isIOS) return;
     if (startedPlaying) musicBtn.classList.add('buffering');
   });
   a.addEventListener('playing', () => {
-    if (thisLoadId !== musicLoadId) return;
-    startedPlaying = true;
-    musicBtn.classList.remove('buffering');
+    if (thisLoadId !== musicLoadId || isIOS) return;
+    startedPlaying = true; musicBtn.classList.remove('buffering');
   });
   a.addEventListener('suspend', () => {
-    if (thisLoadId !== musicLoadId) return;
+    if (thisLoadId !== musicLoadId || isIOS) return;
     musicBtn.classList.remove('buffering');
   });
   a.addEventListener('error', () => {
@@ -1246,19 +1176,9 @@ function fadeToMusic(src, ch, callback) {
 
 // ===== 密码门 =====
 function showPasswordGate() {
-  if (currentAudio && !currentAudio.paused) {
-    if (isIOS) {
-      currentAudio.pause(); currentAudio.src = '';
-      musicBtn.classList.add('paused');
-    } else {
-      let vol = currentAudio.volume;
-      const step = vol / 20;
-      const fadeOut = setInterval(() => {
-        vol = Math.max(0, vol - step);
-        currentAudio.volume = vol;
-        if (vol <= 0) { clearInterval(fadeOut); currentAudio.pause(); musicBtn.classList.add('paused'); }
-      }, 50);
-    }
+  if (currentAudio) {
+    currentAudio.pause(); currentAudio.src = '';
+    musicBtn.classList.add('paused');
     currentAudio = null;
   }
   passwordGate.classList.remove('hidden');
