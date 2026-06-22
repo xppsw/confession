@@ -1093,13 +1093,16 @@ function fadeToMusic(src, ch, callback) {
     if (currentAudio && !currentAudio.paused) {
       const old = currentAudio;
       currentAudio = null;
-      let vol = old.volume;
-      const step = Math.max(vol / 18, 0.01);
-      musicFadeTimer = setInterval(() => {
-        vol = Math.max(0, vol - step);
-        old.volume = vol;
-        if (vol <= 0) { clearInterval(musicFadeTimer); old.pause(); old.src = ''; }
-      }, 40);
+      const startVol = old.volume;
+      const startTime = performance.now();
+      const fadeOut = () => {
+        const elapsed = performance.now() - startTime;
+        const progress = Math.min(1, elapsed / 700);
+        old.volume = startVol * (1 - progress);
+        if (progress < 1) { requestAnimationFrame(fadeOut); }
+        else { old.pause(); old.src = ''; }
+      };
+      requestAnimationFrame(fadeOut);
     }
     if (callback) callback();
     return;
@@ -1130,30 +1133,35 @@ function fadeToMusic(src, ch, callback) {
     // 确保在播（第一次 play() 可能因没缓冲被拒，这里重试）
     a.play().catch(() => {});
 
-    // 渐弱旧音乐
+    // 渐弱旧音乐（rAF，700ms）
     if (oldAudio && !oldAudio.paused) {
-      let vol = oldAudio.volume;
-      const step = Math.max(vol / 18, 0.01);
-      const fadeOut = setInterval(() => {
-        vol = Math.max(0, vol - step);
-        oldAudio.volume = vol;
-        if (vol <= 0) { clearInterval(fadeOut); oldAudio.pause(); oldAudio.src = ''; }
-      }, 40);
+      const startVol = oldAudio.volume;
+      const startTime = performance.now();
+      const fadeOut = () => {
+        const elapsed = performance.now() - startTime;
+        const progress = Math.min(1, elapsed / 700);
+        oldAudio.volume = startVol * (1 - progress);
+        if (progress < 1) { requestAnimationFrame(fadeOut); }
+        else { oldAudio.pause(); oldAudio.src = ''; }
+      };
+      requestAnimationFrame(fadeOut);
     } else if (oldAudio) {
       oldAudio.pause(); oldAudio.src = '';
     }
 
-    // 渐入新音乐
+    // 渐入新音乐（rAF，1500ms）
     musicBtn.classList.remove('loading', 'buffering');
-    let v = 0;
     const target = volumeSlider.value / 100;
-    const step = Math.max(target / 30, 0.005);
-    const fadeIn = setInterval(() => {
-      if (thisLoadId !== musicLoadId) { clearInterval(fadeIn); return; }
-      v = Math.min(target, v + step);
+    const startTime = performance.now();
+    const fadeIn = () => {
+      if (thisLoadId !== musicLoadId) return;
+      const elapsed = performance.now() - startTime;
+      const v = Math.min(target, target * (elapsed / 1500));
       a.volume = v;
-      if (v >= target) { clearInterval(fadeIn); musicBtn.classList.remove('paused'); if (callback) callback(); }
-    }, 50);
+      if (v < target) { requestAnimationFrame(fadeIn); }
+      else { musicBtn.classList.remove('paused'); if (callback) callback(); }
+    };
+    requestAnimationFrame(fadeIn);
   };
 
   // 直接交叉渐变，不等待（旧音乐继续播，新音乐立即淡入）
