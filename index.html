@@ -985,6 +985,16 @@ let initialRender = true;
 let currentAudio = null;
 let musicLoadId = 0;
 
+// ===== 共享 AudioContext（Web Audio API 渐变，iOS 完美支持）=====
+let musicCtx = null;
+function getMusicCtx() {
+  if (!musicCtx) {
+    musicCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (musicCtx.state === 'suspended') musicCtx.resume();
+  return musicCtx;
+}
+
 // ===== 音频预加载缓存（Blob URL，播放零卡顿）=====
 const audioCache = new Map(); // src → { blobUrl, blob }
 const audioFetching = new Map(); // src → Promise (防止重复fetch)
@@ -1096,33 +1106,48 @@ function fadeToMusic(src, ch, callback) {
   const cached = audioCache.get(src);
   const audioSrc = cached ? cached.blobUrl : src;
 
-  // ── 后台创建新音频（加载但不播）──
+  // ── 创建新音频 + GainNode（Web Audio API 渐变，iOS 完美支持）──
   const a = new Audio(audioSrc);
   a.loop = true;
-  a.volume = 0;
   a.preload = 'auto';
+  let gainNode = null;
+  try {
+    const ctx = getMusicCtx();
+    const source = ctx.createMediaElementSource(a);
+    gainNode = ctx.createGain();
+    source.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    a._gainNode = gainNode;
+  } catch(e) { /* fallback to audio.volume */ }
 
-  // ── 先淡出旧音乐（1s），淡出期间新音乐在后台加载 ──
   const startNew = () => {
     if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
     currentAudio = a;
-    // 同步 play() —— 在点击回调链内
     let startedPlaying = false;
     a.play().then(() => { startedPlaying = true; }).catch(() => {});
     musicBtn.classList.remove('loading', 'buffering');
 
-    // 渐入（1.5s setTimeout）
+    // 渐入（GainNode 或 setTimeout fallback）
     const target = volumeSlider.value / 100;
-    const steps = 15;
-    let i = 0;
-    const tick = () => {
-      if (thisLoadId !== musicLoadId) return;
-      i++;
-      a.volume = Math.min(target, target * (i / steps));
-      if (i < steps) { setTimeout(tick, 100); }
-      else { musicBtn.classList.remove('paused'); if (callback) callback(); }
-    };
-    tick();
+    if (gainNode) {
+      gainNode.gain.setValueAtTime(0, getMusicCtx().currentTime);
+      gainNode.gain.linearRampToValueAtTime(target, getMusicCtx().currentTime + 1.5);
+      setTimeout(() => {
+        if (thisLoadId !== musicLoadId) return;
+        musicBtn.classList.remove('paused'); if (callback) callback();
+      }, 1600);
+    } else {
+      a.volume = 0;
+      const steps = 15; let i = 0;
+      const tick = () => {
+        if (thisLoadId !== musicLoadId) return;
+        i++;
+        a.volume = Math.min(target, target * (i / steps));
+        if (i < steps) { setTimeout(tick, 100); }
+        else { musicBtn.classList.remove('paused'); if (callback) callback(); }
+      };
+      tick();
+    }
 
     // 中途缓冲
     a.addEventListener('waiting', () => {
@@ -1163,23 +1188,35 @@ function fadeToMusic(src, ch, callback) {
   if (!cached) { fetchAudioBlob(src).catch(() => {}); }
 }
 
-// ── 淡出音频（setTimeout，1s）──
+// ── 淡出音频（GainNode 或 setTimeout fallback，1s）──
 function fadeOutAudio(audio, onDone) {
   if (!audio || audio.paused) {
     if (audio) { audio.pause(); audio.src = ''; }
     if (onDone) onDone();
     return;
   }
-  const startVol = audio.volume;
-  const steps = 10;
-  let i = 0;
-  const tick = () => {
-    i++;
-    audio.volume = Math.max(0, startVol * (1 - i / steps));
-    if (i < steps) { setTimeout(tick, 100); }
-    else { audio.pause(); audio.src = ''; if (onDone) onDone(); }
-  };
-  tick();
+  const gain = audio._gainNode;
+  if (gain) {
+    const ctx = getMusicCtx();
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 1);
+    setTimeout(() => {
+      audio.pause(); audio.src = '';
+      try { gain.disconnect(); } catch(e) {}
+      if (onDone) onDone();
+    }, 1100);
+  } else {
+    const startVol = audio.volume;
+    const steps = 10; let i = 0;
+    const tick = () => {
+      i++;
+      audio.volume = Math.max(0, startVol * (1 - i / steps));
+      if (i < steps) { setTimeout(tick, 100); }
+      else { audio.pause(); audio.src = ''; if (onDone) onDone(); }
+    };
+    tick();
+  }
 }
 
 // ===== 密码门 =====
@@ -1271,7 +1308,13 @@ function renderChapter(index) {
   // 章节指定初始音量
   if (ch.theme.initialVolume !== undefined) {
     volumeSlider.value = ch.theme.initialVolume;
-    if (currentAudio) currentAudio.volume = ch.theme.initialVolume / 100;
+    if (currentAudio) {
+      if (currentAudio._gainNode) {
+        currentAudio._gainNode.gain.setValueAtTime(ch.theme.initialVolume / 100, getMusicCtx().currentTime);
+      } else {
+        currentAudio.volume = ch.theme.initialVolume / 100;
+      }
+    }
   }
 
   fadeToMusic(ch.music, ch);
@@ -1319,7 +1362,12 @@ musicBtn.addEventListener('click', () => {
 });
 
 volumeSlider.addEventListener('input', function() {
-  if (currentAudio) currentAudio.volume = this.value / 100;
+  if (!currentAudio) return;
+  if (currentAudio._gainNode) {
+    currentAudio._gainNode.gain.setValueAtTime(this.value / 100, getMusicCtx().currentTime);
+  } else {
+    currentAudio.volume = this.value / 100;
+  }
 });
 
 // ===== 我的大学滚动到底 → 闪烁提示 =====
