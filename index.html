@@ -986,6 +986,8 @@ let currentAudio = null;
 let musicFadeTimer = null;
 let musicLoadId = 0;
 let musicTimeoutId = null;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 // ===== 音频预加载缓存（Blob URL）=====
 const audioCache = new Map();
@@ -1084,13 +1086,67 @@ function applyTheme(theme) {
   }
 }
 
-// ===== 音乐切换（交叉淡入淡出）=====
+// ===== 音乐切换（iOS 和 安卓/桌面 分开处理）=====
 function fadeToMusic(src, ch, callback) {
   if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
   clearInterval(musicFadeTimer);
   musicLoadId++;
   const thisLoadId = musicLoadId;
 
+  if (!src) { currentAudio = null; if (callback) callback(); return; }
+
+  const cached = audioCache.get(src);
+  const audioSrc = cached ? cached.blobUrl : src;
+
+  if (isIOS) {
+    // ── iOS：不淡出旧的（系统会自动停），直接切新 + 淡入 ──
+    if (currentAudio) { currentAudio.pause(); currentAudio.src = ''; }
+    currentAudio = null;
+
+    const a = new Audio(audioSrc);
+    a.loop = true; a.volume = 0;
+    a.preload = 'auto';
+
+    const doPlay = () => {
+      if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
+      musicTimeoutId = null;
+      a.play().catch(() => {});
+      currentAudio = a;
+      musicBtn.classList.remove('loading', 'buffering');
+      let v = 0;
+      const target = volumeSlider.value / 100;
+      const step = Math.max(target / 30, 0.005);
+      const fadeIn = setInterval(() => {
+        if (thisLoadId !== musicLoadId) { clearInterval(fadeIn); return; }
+        v = Math.min(target, v + step);
+        a.volume = v;
+        if (v >= target) { clearInterval(fadeIn); musicBtn.classList.remove('paused'); if (callback) callback(); }
+      }, 50);
+    };
+
+    let canplayFallback = null;
+    let started = false;
+    a.addEventListener('canplay', () => {
+      if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
+      if (started) return; started = true;
+      doPlay();
+    }, { once: true });
+    canplayFallback = setTimeout(() => { if (!started) doPlay(); }, 10000);
+
+    a.addEventListener('error', () => {
+      if (thisLoadId !== musicLoadId) return;
+      clearTimeout(canplayFallback);
+      musicBtn.classList.remove('loading'); musicBtn.classList.add('paused');
+      currentAudio = null; if (callback) callback();
+    }, { once: true });
+
+    if (!cached) musicBtn.classList.add('loading');
+    a.src = audioSrc; a.load();
+    if (!cached) { fetchAudioBlob(src).catch(() => {}); }
+    return;
+  }
+
+  // ── 安卓/桌面：完整交叉淡入淡出 ──
   // 渐弱旧音乐
   if (currentAudio && !currentAudio.paused) {
     const old = currentAudio;
@@ -1116,12 +1172,6 @@ function fadeToMusic(src, ch, callback) {
     currentAudio = null;
   }
 
-  if (!src) { currentAudio = null; if (callback) callback(); return; }
-
-  // 优先用缓存 Blob
-  const cached = audioCache.get(src);
-  const audioSrc = cached ? cached.blobUrl : src;
-
   const a = new Audio(audioSrc);
   a.loop = true; a.volume = 0;
   a.preload = 'auto';
@@ -1143,19 +1193,15 @@ function fadeToMusic(src, ch, callback) {
     }, 50);
   };
 
-  // canplay 就开播（快）
   let canplayFallback = null;
   let started = false;
-  const onReady = () => {
+  a.addEventListener('canplay', () => {
     if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-    if (started) return;
-    started = true;
+    if (started) return; started = true;
     doPlay();
-  };
-  a.addEventListener('canplay', onReady, { once: true });
-  canplayFallback = setTimeout(() => { if (!started) onReady(); }, 10000);
+  }, { once: true });
+  canplayFallback = setTimeout(() => { if (!started) doPlay(); }, 10000);
 
-  // 中途缓冲
   let startedPlaying = false;
   a.addEventListener('waiting', () => {
     if (thisLoadId !== musicLoadId) return;
@@ -1170,35 +1216,34 @@ function fadeToMusic(src, ch, callback) {
     if (thisLoadId !== musicLoadId) return;
     musicBtn.classList.remove('buffering');
   });
-
   a.addEventListener('error', () => {
     if (thisLoadId !== musicLoadId) return;
     clearTimeout(canplayFallback);
     musicBtn.classList.remove('loading', 'buffering');
     musicBtn.classList.add('paused');
-    console.warn('音乐加载失败:', src);
-    currentAudio = null;
-    if (callback) callback();
+    currentAudio = null; if (callback) callback();
   }, { once: true });
 
   if (!cached) musicBtn.classList.add('loading');
-  a.src = audioSrc;
-  a.load();
-
-  // 后台预下载 Blob
+  a.src = audioSrc; a.load();
   if (!cached) { fetchAudioBlob(src).catch(() => {}); }
 }
 
 // ===== 密码门 =====
 function showPasswordGate() {
   if (currentAudio && !currentAudio.paused) {
-    let vol = currentAudio.volume;
-    const step = vol / 20;
-    const fadeOut = setInterval(() => {
-      vol = Math.max(0, vol - step);
-      currentAudio.volume = vol;
-      if (vol <= 0) { clearInterval(fadeOut); currentAudio.pause(); musicBtn.classList.add('paused'); }
-    }, 50);
+    if (isIOS) {
+      currentAudio.pause(); currentAudio.src = '';
+      musicBtn.classList.add('paused');
+    } else {
+      let vol = currentAudio.volume;
+      const step = vol / 20;
+      const fadeOut = setInterval(() => {
+        vol = Math.max(0, vol - step);
+        currentAudio.volume = vol;
+        if (vol <= 0) { clearInterval(fadeOut); currentAudio.pause(); musicBtn.classList.add('paused'); }
+      }, 50);
+    }
     currentAudio = null;
   }
   passwordGate.classList.remove('hidden');
