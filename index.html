@@ -1082,7 +1082,7 @@ function applyTheme(theme) {
   }
 }
 
-// ===== 音乐切换（fetch Blob → 零卡顿交叉淡入淡出）=====
+// ===== 音乐切换（流式播放 + 交叉淡入淡出 + Blob缓存预加载）=====
 function fadeToMusic(src, ch, callback) {
   if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
   clearInterval(musicFadeTimer);
@@ -1090,7 +1090,6 @@ function fadeToMusic(src, ch, callback) {
   const thisLoadId = musicLoadId;
 
   if (!src) {
-    // 无新音乐，渐弱旧音乐后停止
     if (currentAudio && !currentAudio.paused) {
       const old = currentAudio;
       currentAudio = null;
@@ -1106,42 +1105,47 @@ function fadeToMusic(src, ch, callback) {
     return;
   }
 
-  // 显示加载中（fetch 可能需几秒）
-  musicBtn.classList.add('loading');
+  // 优先用缓存 Blob（零卡顿），否则用流式 URL
+  const cached = audioCache.get(src);
+  const audioSrc = cached ? cached.blobUrl : src;
 
-  // 异步下载完整音频文件 → Blob URL（从内存播放，零卡顿）
-  fetchAudioBlob(src).then(blobUrl => {
-    if (thisLoadId !== musicLoadId) return;
+  const a = new Audio(audioSrc);
+  a.loop = true;
+  a.volume = 0;
+  a.preload = 'auto';
+  if (!cached) a.crossOrigin = 'anonymous';
 
-    const a = new Audio(blobUrl);
-    a.loop = true;
-    a.volume = 0;
+  // ★ 同步调用 play() —— 若在点击回调链内，移动端 autoplay 通过
+  let startedPlaying = false;
+  a.play().then(() => { startedPlaying = true; }).catch(() => {});
 
-    // ── 交叉淡入淡出：旧渐弱 + 新渐入 同时进行 ──
-    const old = currentAudio;
-    currentAudio = a;
+  const oldAudio = currentAudio;
+  currentAudio = a;
 
-    // 渐弱旧音乐（如果还在播）
-    if (old && !old.paused) {
-      let vol = old.volume;
+  if (!cached) musicBtn.classList.add('loading');
+
+  // ── 交叉淡入淡出（新就绪后同步进行）──
+  const doCrossfade = () => {
+    if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
+
+    // 确保在播（第一次 play() 可能因没缓冲被拒，这里重试）
+    a.play().catch(() => {});
+
+    // 渐弱旧音乐
+    if (oldAudio && !oldAudio.paused) {
+      let vol = oldAudio.volume;
       const step = Math.max(vol / 18, 0.01);
       const fadeOut = setInterval(() => {
         vol = Math.max(0, vol - step);
-        old.volume = vol;
-        if (vol <= 0) {
-          clearInterval(fadeOut);
-          old.pause(); old.src = '';
-        }
+        oldAudio.volume = vol;
+        if (vol <= 0) { clearInterval(fadeOut); oldAudio.pause(); oldAudio.src = ''; }
       }, 40);
-    } else if (old) {
-      old.pause(); old.src = '';
+    } else if (oldAudio) {
+      oldAudio.pause(); oldAudio.src = '';
     }
 
-    // 播放新音乐
-    a.play().catch(() => {});
-    musicBtn.classList.remove('loading', 'buffering');
-
     // 渐入新音乐
+    musicBtn.classList.remove('loading', 'buffering');
     let v = 0;
     const target = volumeSlider.value / 100;
     const step = Math.max(target / 30, 0.005);
@@ -1151,14 +1155,54 @@ function fadeToMusic(src, ch, callback) {
       a.volume = v;
       if (v >= target) { clearInterval(fadeIn); musicBtn.classList.remove('paused'); if (callback) callback(); }
     }, 50);
-  }).catch(() => {
+  };
+
+  if (cached) {
+    // Blob 缓存秒播
+    doCrossfade();
+  } else {
+    // 流式：等缓冲够了再交叉渐变
+    let canplayFired = false;
+    a.addEventListener('canplay', () => {
+      if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
+      if (canplayFired) return;
+      canplayFired = true;
+      clearTimeout(canplayFallback);
+      doCrossfade();
+    });
+    const canplayFallback = setTimeout(() => {
+      if (!canplayFired) { canplayFired = true; doCrossfade(); }
+    }, 10000);
+  }
+
+  // ── 播放中途缓冲耗尽 ──
+  a.addEventListener('waiting', () => {
     if (thisLoadId !== musicLoadId) return;
-    musicBtn.classList.remove('loading');
+    if (startedPlaying) musicBtn.classList.add('buffering');
+  });
+  a.addEventListener('playing', () => {
+    if (thisLoadId !== musicLoadId) return;
+    musicBtn.classList.remove('buffering');
+  });
+  a.addEventListener('suspend', () => {
+    if (thisLoadId !== musicLoadId) return;
+    musicBtn.classList.remove('buffering');
+  });
+
+  // 错误处理
+  a.addEventListener('error', () => {
+    if (thisLoadId !== musicLoadId) return;
+    musicBtn.classList.remove('loading', 'buffering');
     musicBtn.classList.add('paused');
     console.warn('音乐加载失败:', src);
     currentAudio = null;
     if (callback) callback();
-  });
+  }, { once: true });
+
+  // 后台预下载 Blob 到缓存（本章结束后自动缓存，下次秒播）
+  if (!cached) {
+    fetchAudioBlob(src).catch(() => {});
+  }
 }
 
 // ===== 密码门 =====
