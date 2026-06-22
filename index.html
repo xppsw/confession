@@ -991,9 +991,12 @@ function getMusicCtx() {
   if (!musicCtx) {
     musicCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
-  if (musicCtx.state === 'suspended') musicCtx.resume();
   return musicCtx;
 }
+// 任何用户点击都 resume AudioContext（否则 GainNode 静音）
+document.addEventListener('click', () => {
+  if (musicCtx && musicCtx.state === 'suspended') musicCtx.resume();
+});
 
 // ===== 音频预加载缓存（Blob URL，播放零卡顿）=====
 const audioCache = new Map(); // src → { blobUrl, blob }
