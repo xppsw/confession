@@ -1113,7 +1113,6 @@ function fadeToMusic(src, ch, callback) {
   a.loop = true;
   a.volume = 0;
   a.preload = 'auto';
-  if (!cached) a.crossOrigin = 'anonymous';
 
   // ★ 同步调用 play() —— 若在点击回调链内，移动端 autoplay 通过
   let startedPlaying = false;
