@@ -983,9 +983,7 @@ let currentChapter = 0;
 let passwordUnlocked = false;
 let initialRender = true;
 let currentAudio = null;
-let musicFadeTimer = null;
 let musicLoadId = 0;
-let musicTimeoutId = null;
 
 // ===== 音频预加载缓存（Blob URL，播放零卡顿）=====
 const audioCache = new Map(); // src → { blobUrl, blob }
@@ -1084,124 +1082,102 @@ function applyTheme(theme) {
   }
 }
 
-// ===== 音乐切换（流式播放 + 交叉淡入淡出 + Blob缓存预加载）=====
+// ===== 音乐切换（先淡出旧 → 再淡入新，iOS 兼容）=====
 function fadeToMusic(src, ch, callback) {
-  if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
-  clearInterval(musicFadeTimer);
   musicLoadId++;
   const thisLoadId = musicLoadId;
 
   if (!src) {
-    if (currentAudio && !currentAudio.paused) {
-      const old = currentAudio;
-      currentAudio = null;
-      const startVol = old.volume;
-      const startTime = performance.now();
-      const fadeOut = () => {
-        const elapsed = performance.now() - startTime;
-        const progress = Math.min(1, elapsed / 700);
-        old.volume = startVol * (1 - progress);
-        if (progress < 1) { requestAnimationFrame(fadeOut); }
-        else { old.pause(); old.src = ''; }
-      };
-      requestAnimationFrame(fadeOut);
-    }
-    if (callback) callback();
+    fadeOutAudio(currentAudio, () => { currentAudio = null; if (callback) callback(); });
     return;
   }
 
-  // 优先用缓存 Blob（零卡顿），否则用流式 URL
+  // 优先用缓存 Blob，否则用流式 URL
   const cached = audioCache.get(src);
   const audioSrc = cached ? cached.blobUrl : src;
 
+  // ── 后台创建新音频（加载但不播）──
   const a = new Audio(audioSrc);
   a.loop = true;
   a.volume = 0;
   a.preload = 'auto';
 
-  // ★ 同步调用 play() —— 若在点击回调链内，移动端 autoplay 通过
-  let startedPlaying = false;
-  a.play().then(() => { startedPlaying = true; }).catch(() => {});
+  // ── 先淡出旧音乐（1s），淡出期间新音乐在后台加载 ──
+  const startNew = () => {
+    if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
+    currentAudio = a;
+    // 同步 play() —— 在点击回调链内
+    let startedPlaying = false;
+    a.play().then(() => { startedPlaying = true; }).catch(() => {});
+    musicBtn.classList.remove('loading', 'buffering');
 
-  const oldAudio = currentAudio;
-  currentAudio = a;
+    // 渐入（1.5s rAF）
+    const target = volumeSlider.value / 100;
+    const start = performance.now();
+    const tick = () => {
+      if (thisLoadId !== musicLoadId) return;
+      const v = Math.min(target, target * ((performance.now() - start) / 1500));
+      a.volume = v;
+      if (v < target) { requestAnimationFrame(tick); }
+      else { musicBtn.classList.remove('paused'); if (callback) callback(); }
+    };
+    requestAnimationFrame(tick);
+
+    // 中途缓冲
+    a.addEventListener('waiting', () => {
+      if (thisLoadId !== musicLoadId) return;
+      if (startedPlaying) musicBtn.classList.add('buffering');
+    });
+    a.addEventListener('playing', () => {
+      if (thisLoadId !== musicLoadId) return;
+      musicBtn.classList.remove('buffering');
+    });
+    a.addEventListener('suspend', () => {
+      if (thisLoadId !== musicLoadId) return;
+      musicBtn.classList.remove('buffering');
+    });
+    a.addEventListener('error', () => {
+      if (thisLoadId !== musicLoadId) return;
+      musicBtn.classList.remove('loading', 'buffering');
+      musicBtn.classList.add('paused');
+      console.warn('音乐加载失败:', src);
+      currentAudio = null;
+      if (callback) callback();
+    }, { once: true });
+  };
 
   if (!cached) musicBtn.classList.add('loading');
 
-  // ── 淡出旧音乐（700ms rAF）──
-  const fadeOutOld = () => {
-    if (!oldAudio || oldAudio.paused) {
-      if (oldAudio) { oldAudio.pause(); oldAudio.src = ''; }
-      return;
-    }
-    const startVol = oldAudio.volume;
-    const startTime = performance.now();
-    const tick = () => {
-      const elapsed = performance.now() - startTime;
-      const progress = Math.min(1, elapsed / 700);
-      oldAudio.volume = startVol * (1 - progress);
-      if (progress < 1) { requestAnimationFrame(tick); }
-      else { oldAudio.pause(); oldAudio.src = ''; }
-    };
-    requestAnimationFrame(tick);
-  };
-
-  // ── 淡入新音乐（1500ms rAF，立即开始）──
-  musicBtn.classList.remove('loading', 'buffering');
-  const target = volumeSlider.value / 100;
-  const fadeStart = performance.now();
-  const fadeIn = () => {
-    if (thisLoadId !== musicLoadId) return;
-    const v = Math.min(target, target * ((performance.now() - fadeStart) / 1500));
-    a.volume = v;
-    if (v < target) { requestAnimationFrame(fadeIn); }
-    else { musicBtn.classList.remove('paused'); if (callback) callback(); }
-  };
-  requestAnimationFrame(fadeIn);
-
-  // ── 淡出旧音乐：等新音乐确认在播后再淡出，避免 iOS 上出现无声空洞 ──
-  a.play().catch(() => {});
-  if (oldAudio && !oldAudio.paused) {
-    if (!a.paused && a.readyState >= 2) {
-      // 新音乐已在播 → 立即淡出旧的
-      fadeOutOld();
-    } else {
-      // 新音乐还没准备好 → 等 playing 事件再淡出，最多等 3 秒
-      let oldFaded = false;
-      const doFade = () => { if (!oldFaded) { oldFaded = true; fadeOutOld(); } };
-      a.addEventListener('playing', doFade, { once: true });
-      setTimeout(doFade, 3000);
-    }
-  }
-
-  // ── 播放中途缓冲耗尽 ──
-  a.addEventListener('waiting', () => {
-    if (thisLoadId !== musicLoadId) return;
-    if (startedPlaying) musicBtn.classList.add('buffering');
-  });
-  a.addEventListener('playing', () => {
-    if (thisLoadId !== musicLoadId) return;
-    musicBtn.classList.remove('buffering');
-  });
-  a.addEventListener('suspend', () => {
-    if (thisLoadId !== musicLoadId) return;
-    musicBtn.classList.remove('buffering');
-  });
-
-  // 错误处理
-  a.addEventListener('error', () => {
-    if (thisLoadId !== musicLoadId) return;
-    musicBtn.classList.remove('loading', 'buffering');
-    musicBtn.classList.add('paused');
-    console.warn('音乐加载失败:', src);
+  if (currentAudio && !currentAudio.paused) {
+    // 淡出旧的（1s），完了接新的
+    fadeOutAudio(currentAudio, startNew);
     currentAudio = null;
-    if (callback) callback();
-  }, { once: true });
-
-  // 后台预下载 Blob 到缓存（本章结束后自动缓存，下次秒播）
-  if (!cached) {
-    fetchAudioBlob(src).catch(() => {});
+  } else {
+    if (currentAudio) { currentAudio.pause(); currentAudio.src = ''; }
+    currentAudio = null;
+    startNew();
   }
+
+  // 后台预下载 Blob 到缓存
+  if (!cached) { fetchAudioBlob(src).catch(() => {}); }
+}
+
+// ── 淡出音频（rAF，1s）──
+function fadeOutAudio(audio, onDone) {
+  if (!audio || audio.paused) {
+    if (audio) { audio.pause(); audio.src = ''; }
+    if (onDone) onDone();
+    return;
+  }
+  const startVol = audio.volume;
+  const startTime = performance.now();
+  const tick = () => {
+    const p = Math.min(1, (performance.now() - startTime) / 1000);
+    audio.volume = startVol * (1 - p);
+    if (p < 1) { requestAnimationFrame(tick); }
+    else { audio.pause(); audio.src = ''; if (onDone) onDone(); }
+  };
+  requestAnimationFrame(tick);
 }
 
 // ===== 密码门 =====
