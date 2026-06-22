@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<link rel="dns-prefetch" href="https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev">
+<link rel="preconnect" href="https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev">
 <meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>一封信</title>
@@ -1126,46 +1128,51 @@ function fadeToMusic(src, ch, callback) {
 
   if (!cached) musicBtn.classList.add('loading');
 
-  // ── 交叉淡入淡出（新就绪后同步进行）──
-  const doCrossfade = () => {
-    if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-
-    // 确保在播（第一次 play() 可能因没缓冲被拒，这里重试）
-    a.play().catch(() => {});
-
-    // 渐弱旧音乐（rAF，700ms）
-    if (oldAudio && !oldAudio.paused) {
-      const startVol = oldAudio.volume;
-      const startTime = performance.now();
-      const fadeOut = () => {
-        const elapsed = performance.now() - startTime;
-        const progress = Math.min(1, elapsed / 700);
-        oldAudio.volume = startVol * (1 - progress);
-        if (progress < 1) { requestAnimationFrame(fadeOut); }
-        else { oldAudio.pause(); oldAudio.src = ''; }
-      };
-      requestAnimationFrame(fadeOut);
-    } else if (oldAudio) {
-      oldAudio.pause(); oldAudio.src = '';
+  // ── 淡出旧音乐（700ms rAF）──
+  const fadeOutOld = () => {
+    if (!oldAudio || oldAudio.paused) {
+      if (oldAudio) { oldAudio.pause(); oldAudio.src = ''; }
+      return;
     }
-
-    // 渐入新音乐（rAF，1500ms）
-    musicBtn.classList.remove('loading', 'buffering');
-    const target = volumeSlider.value / 100;
+    const startVol = oldAudio.volume;
     const startTime = performance.now();
-    const fadeIn = () => {
-      if (thisLoadId !== musicLoadId) return;
+    const tick = () => {
       const elapsed = performance.now() - startTime;
-      const v = Math.min(target, target * (elapsed / 1500));
-      a.volume = v;
-      if (v < target) { requestAnimationFrame(fadeIn); }
-      else { musicBtn.classList.remove('paused'); if (callback) callback(); }
+      const progress = Math.min(1, elapsed / 700);
+      oldAudio.volume = startVol * (1 - progress);
+      if (progress < 1) { requestAnimationFrame(tick); }
+      else { oldAudio.pause(); oldAudio.src = ''; }
     };
-    requestAnimationFrame(fadeIn);
+    requestAnimationFrame(tick);
   };
 
-  // 直接交叉渐变，不等待（旧音乐继续播，新音乐立即淡入）
-  doCrossfade();
+  // ── 淡入新音乐（1500ms rAF，立即开始）──
+  musicBtn.classList.remove('loading', 'buffering');
+  const target = volumeSlider.value / 100;
+  const fadeStart = performance.now();
+  const fadeIn = () => {
+    if (thisLoadId !== musicLoadId) return;
+    const v = Math.min(target, target * ((performance.now() - fadeStart) / 1500));
+    a.volume = v;
+    if (v < target) { requestAnimationFrame(fadeIn); }
+    else { musicBtn.classList.remove('paused'); if (callback) callback(); }
+  };
+  requestAnimationFrame(fadeIn);
+
+  // ── 淡出旧音乐：等新音乐确认在播后再淡出，避免 iOS 上出现无声空洞 ──
+  a.play().catch(() => {});
+  if (oldAudio && !oldAudio.paused) {
+    if (!a.paused && a.readyState >= 2) {
+      // 新音乐已在播 → 立即淡出旧的
+      fadeOutOld();
+    } else {
+      // 新音乐还没准备好 → 等 playing 事件再淡出，最多等 3 秒
+      let oldFaded = false;
+      const doFade = () => { if (!oldFaded) { oldFaded = true; fadeOutOld(); } };
+      a.addEventListener('playing', doFade, { once: true });
+      setTimeout(doFade, 3000);
+    }
+  }
 
   // ── 播放中途缓冲耗尽 ──
   a.addEventListener('waiting', () => {
