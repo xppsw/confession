@@ -1099,9 +1099,29 @@ function fadeToMusic(src, ch, callback) {
   const audioSrc = cached ? cached.blobUrl : src;
 
   if (isIOS) {
-    // ── iOS：不淡出旧的（系统会自动停），直接切新 + 淡入 ──
-    if (currentAudio) { currentAudio.pause(); currentAudio.src = ''; }
-    currentAudio = null;
+    // ── iOS：淡出旧音乐（setInterval 在 canplay 前就跑完），新音乐直接满音量 ──
+    if (currentAudio && !currentAudio.paused) {
+      const old = currentAudio;
+      currentAudio = null;
+      let vol = old.volume;
+      const fadeStep = Math.max(vol / 18, 0.01);
+      musicFadeTimer = setInterval(() => {
+        if (thisLoadId !== musicLoadId) {
+          clearInterval(musicFadeTimer);
+          old.pause(); old.src = '';
+          return;
+        }
+        vol = Math.max(0, vol - fadeStep);
+        old.volume = vol;
+        if (vol <= 0) {
+          clearInterval(musicFadeTimer);
+          old.pause(); old.src = '';
+        }
+      }, 40);
+    } else if (currentAudio) {
+      currentAudio.pause(); currentAudio.src = '';
+      currentAudio = null;
+    }
 
     const a = new Audio(audioSrc);
     a.loop = true; a.volume = 0;
@@ -1112,16 +1132,10 @@ function fadeToMusic(src, ch, callback) {
       musicTimeoutId = null;
       a.play().catch(() => {});
       currentAudio = a;
-      musicBtn.classList.remove('loading', 'buffering');
-      let v = 0;
-      const target = volumeSlider.value / 100;
-      const step = Math.max(target / 30, 0.005);
-      const fadeIn = setInterval(() => {
-        if (thisLoadId !== musicLoadId) { clearInterval(fadeIn); return; }
-        v = Math.min(target, v + step);
-        a.volume = v;
-        if (v >= target) { clearInterval(fadeIn); musicBtn.classList.remove('paused'); if (callback) callback(); }
-      }, 50);
+      musicBtn.classList.remove('loading', 'buffering', 'paused');
+      // 直接满音量，不做淡入（iOS 加载慢，淡入更拖沓）
+      a.volume = volumeSlider.value / 100;
+      if (callback) callback();
     };
 
     let canplayFallback = null;
@@ -1129,6 +1143,7 @@ function fadeToMusic(src, ch, callback) {
     a.addEventListener('canplay', () => {
       if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
       if (started) return; started = true;
+      clearTimeout(canplayFallback);
       doPlay();
     }, { once: true });
     canplayFallback = setTimeout(() => { if (!started) doPlay(); }, 10000);
