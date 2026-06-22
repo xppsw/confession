@@ -1190,9 +1190,20 @@ function fadeToMusic(src, ch, callback) {
 
 // ===== 密码门 =====
 function showPasswordGate() {
-  if (currentAudio) {
-    currentAudio.pause(); currentAudio.src = '';
-    musicBtn.classList.add('paused');
+  if (currentAudio && !currentAudio.paused) {
+    if (isIOS) {
+      currentAudio.pause(); currentAudio.src = '';
+      musicBtn.classList.add('paused');
+    } else {
+      const old = currentAudio;
+      let vol = old.volume;
+      const step = vol / 20;
+      const fadeOut = setInterval(() => {
+        vol = Math.max(0, vol - step);
+        old.volume = vol;
+        if (vol <= 0) { clearInterval(fadeOut); old.pause(); old.src = ''; musicBtn.classList.add('paused'); }
+      }, 50);
+    }
     currentAudio = null;
   }
   passwordGate.classList.remove('hidden');
