@@ -212,6 +212,26 @@
   }
   .nav-btn:hover { color: var(--text, #3a3632); border-color: var(--border-hover, rgba(0,0,0,0.2)); }
   .nav-btn:disabled { opacity: 0.25; pointer-events: none; }
+  /* 闪烁高亮提示 */
+  #next-btn.glow-hint {
+    animation: glowPulse 0.9s ease-in-out infinite;
+    position: relative; overflow: hidden;
+  }
+  #next-btn.glow-hint::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: rgba(255,255,255,0.55);
+    animation: whiteFlash 0.9s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes whiteFlash {
+    0%, 100% { opacity: 0; }
+    50% { opacity: 1; }
+  }
+  @keyframes glowPulse {
+    0%, 100% { box-shadow: 0 0 0 rgba(255,255,255,0); }
+    50% { box-shadow: 0 0 20px rgba(255,255,255,0.5), 0 0 36px rgba(255,255,255,0.2); }
+  }
   #chapter-indicator {
     font-size: 12px; letter-spacing: 2px; color: var(--text2, #9a958e); text-align: center;
   }
@@ -1027,13 +1047,34 @@ function applyTheme(theme) {
 function fadeToMusic(src, ch, callback) {
   if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
   clearInterval(musicFadeTimer);
-  if (currentAudio) {
+  musicLoadId++;
+  const thisLoadId = musicLoadId;
+
+  // 渐弱旧音乐
+  if (currentAudio && !currentAudio.paused) {
+    const old = currentAudio;
+    currentAudio = null;
+    let vol = old.volume;
+    const fadeStep = Math.max(vol / 18, 0.01);
+    musicFadeTimer = setInterval(() => {
+      if (thisLoadId !== musicLoadId) {
+        clearInterval(musicFadeTimer);
+        old.pause(); old.src = '';
+        return;
+      }
+      vol = Math.max(0, vol - fadeStep);
+      old.volume = vol;
+      if (vol <= 0) {
+        clearInterval(musicFadeTimer);
+        old.pause(); old.src = '';
+      }
+    }, 40);
+  } else if (currentAudio) {
     currentAudio.pause();
     currentAudio.src = '';
     currentAudio = null;
   }
-  musicLoadId++;
-  const thisLoadId = musicLoadId;
+
   if (!src) { currentAudio = null; if (callback) callback(); return; }
 
   const a = new Audio();
@@ -1167,6 +1208,8 @@ function renderChapter(index) {
 
   fadeToMusic(ch.music, ch);
   nowPlaying.textContent = ch.musicLabel;
+  nextBtn.classList.remove('glow-hint');
+  glowHintShown = false;
 }
 
 // ===== 导航 =====
@@ -1206,6 +1249,26 @@ musicBtn.addEventListener('click', () => {
 volumeSlider.addEventListener('input', function() {
   if (currentAudio) currentAudio.volume = this.value / 100;
 });
+
+// ===== 我的大学滚动到底 → 闪烁提示 =====
+let glowHintShown = false;
+window.addEventListener('scroll', function() {
+  if (currentChapter !== 4) {
+    if (nextBtn.classList.contains('glow-hint')) {
+      nextBtn.classList.remove('glow-hint');
+      glowHintShown = false;
+    }
+    return;
+  }
+  const scrollBottom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+  if (scrollBottom < 120 && !glowHintShown) {
+    nextBtn.classList.add('glow-hint');
+    glowHintShown = true;
+  } else if (scrollBottom >= 120 && glowHintShown) {
+    nextBtn.classList.remove('glow-hint');
+    glowHintShown = false;
+  }
+}, { passive: true });
 
 // ===== 初始化 =====
 renderChapter(0);
