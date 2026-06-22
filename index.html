@@ -1120,6 +1120,8 @@ function fadeToMusic(src, ch, callback) {
   }
 
   if (!audioReady) setupAudioPipeline();
+  // 确保 AudioContext 在运行（iOS 可能在 idle 后 suspend）
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 
   const cached = audioCache.get(src);
   const audioSrc = cached ? cached.blobUrl : src;
@@ -1127,10 +1129,8 @@ function fadeToMusic(src, ch, callback) {
   const doSwitch = () => {
     if (thisLoadId !== musicLoadId) return;
 
-    // 换 src
-    audioEl.pause();
+    // GainNode 已在 0，直接换 src（不 pause，避免 iOS 音频会话切换杂音）
     audioEl.src = audioSrc;
-    audioEl.load();
 
     const startPlay = () => {
       if (thisLoadId !== musicLoadId) return;
