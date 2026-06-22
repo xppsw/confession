@@ -982,12 +982,34 @@ const CORRECT_PASSWORD = "hope";
 let currentChapter = 0;
 let passwordUnlocked = false;
 let initialRender = true;
-let currentAudio = null;
+let currentAudio = null; // 指向 audioEl（兼容旧引用）
 let musicLoadId = 0;
 
-// ===== 音频预加载缓存（Blob URL，播放零卡顿）=====
-const audioCache = new Map(); // src → { blobUrl, blob }
-const audioFetching = new Map(); // src → Promise (防止重复fetch)
+// ===== 单 Audio + GainNode 管线（iOS 完美渐变）=====
+let audioEl = null;
+let gainNode = null;
+let audioCtx = null;
+let audioReady = false;
+
+function setupAudioPipeline() {
+  if (audioReady) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume();
+  audioEl = new Audio();
+  audioEl.loop = true;
+  audioEl.volume = 1;
+  const source = audioCtx.createMediaElementSource(audioEl);
+  gainNode = audioCtx.createGain();
+  source.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  gainNode.gain.value = 0;
+  audioReady = true;
+  currentAudio = audioEl;
+}
+
+// ===== 音频预加载缓存（Blob URL）=====
+const audioCache = new Map();
+const audioFetching = new Map();
 
 async function fetchAudioBlob(src) {
   if (audioCache.has(src)) return audioCache.get(src).blobUrl;
@@ -1082,107 +1104,102 @@ function applyTheme(theme) {
   }
 }
 
-// ===== 音乐切换（先淡出旧 → 再淡入新，iOS 兼容）=====
+// ===== 音乐切换（单 Audio + GainNode：渐变 → 换 src → 渐变）=====
 function fadeToMusic(src, ch, callback) {
   musicLoadId++;
   const thisLoadId = musicLoadId;
 
   if (!src) {
-    fadeOutAudio(currentAudio, () => { currentAudio = null; if (callback) callback(); });
+    if (gainNode) {
+      gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(gainNode.gain.value, audioCtx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8);
+    }
+    if (callback) callback();
     return;
   }
 
-  // 优先用缓存 Blob，否则用流式 URL
+  if (!audioReady) setupAudioPipeline();
+
   const cached = audioCache.get(src);
   const audioSrc = cached ? cached.blobUrl : src;
 
-  // ── 创建新音频 ──
-  const a = new Audio(audioSrc);
-  a.loop = true;
-  a.volume = 0;
-  a.preload = 'auto';
+  const doSwitch = () => {
+    if (thisLoadId !== musicLoadId) return;
 
-  const startNew = () => {
-    if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-    currentAudio = a;
-    let startedPlaying = false;
-    a.play().then(() => { startedPlaying = true; }).catch(() => {});
-    musicBtn.classList.remove('loading', 'buffering');
+    // 换 src
+    audioEl.pause();
+    audioEl.src = audioSrc;
+    audioEl.load();
 
-    // 渐入（1.5s setTimeout）
-    const target = volumeSlider.value / 100;
-    const steps = 15; let i = 0;
-    const tick = () => {
+    const startPlay = () => {
       if (thisLoadId !== musicLoadId) return;
-      i++;
-      a.volume = Math.min(target, target * (i / steps));
-      if (i < steps) { setTimeout(tick, 100); }
-      else { musicBtn.classList.remove('paused'); if (callback) callback(); }
-    };
-    tick();
-
-    // 中途缓冲
-    a.addEventListener('waiting', () => {
-      if (thisLoadId !== musicLoadId) return;
-      if (startedPlaying) musicBtn.classList.add('buffering');
-    });
-    a.addEventListener('playing', () => {
-      if (thisLoadId !== musicLoadId) return;
-      musicBtn.classList.remove('buffering');
-    });
-    a.addEventListener('suspend', () => {
-      if (thisLoadId !== musicLoadId) return;
-      musicBtn.classList.remove('buffering');
-    });
-    a.addEventListener('error', () => {
-      if (thisLoadId !== musicLoadId) return;
+      audioEl.play().catch(() => {});
       musicBtn.classList.remove('loading', 'buffering');
-      musicBtn.classList.add('paused');
-      console.warn('音乐加载失败:', src);
-      currentAudio = null;
-      if (callback) callback();
-    }, { once: true });
+
+      // GainNode 渐入（1.5s，硬件级丝滑）
+      const target = volumeSlider.value / 100;
+      gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(target, audioCtx.currentTime + 1.5);
+      setTimeout(() => {
+        if (thisLoadId !== musicLoadId) return;
+        musicBtn.classList.remove('paused');
+        if (callback) callback();
+      }, 1600);
+    };
+
+    if (cached || audioEl.readyState >= 2) {
+      startPlay();
+    } else {
+      musicBtn.classList.add('loading');
+      audioEl.addEventListener('canplay', startPlay, { once: true });
+      setTimeout(startPlay, 10000);
+    }
   };
 
-  if (!cached) musicBtn.classList.add('loading');
-
-  if (currentAudio && !currentAudio.paused) {
-    // 淡出旧的（1s），完了接新的
-    fadeOutAudio(currentAudio, startNew);
-    currentAudio = null;
+  // ── 先 GainNode 淡出（0.8s），再换 src ──
+  if (gainNode && audioEl && !audioEl.paused && gainNode.gain.value > 0.01) {
+    gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(gainNode.gain.value, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8);
+    setTimeout(doSwitch, 900);
   } else {
-    if (currentAudio) { currentAudio.pause(); currentAudio.src = ''; }
-    currentAudio = null;
-    startNew();
+    doSwitch();
   }
 
-  // 后台预下载 Blob 到缓存
+  // 后台预下载
   if (!cached) { fetchAudioBlob(src).catch(() => {}); }
 }
 
-// ── 淡出音频（setTimeout，1s）──
+// ── 淡出音频（GainNode）──
 function fadeOutAudio(audio, onDone) {
   if (!audio || audio.paused) {
     if (audio) { audio.pause(); audio.src = ''; }
     if (onDone) onDone();
     return;
   }
-  const startVol = audio.volume;
-  const steps = 10; let i = 0;
-  const tick = () => {
-    i++;
-    audio.volume = Math.max(0, startVol * (1 - i / steps));
-    if (i < steps) { setTimeout(tick, 100); }
-    else { audio.pause(); audio.src = ''; if (onDone) onDone(); }
-  };
-  tick();
+  if (gainNode) {
+    gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(gainNode.gain.value, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8);
+    setTimeout(() => {
+      audio.pause(); audio.src = '';
+      if (onDone) onDone();
+    }, 900);
+  }
 }
 
 // ===== 密码门 =====
 function showPasswordGate() {
-  if (currentAudio && !currentAudio.paused) {
-    fadeOutAudio(currentAudio, () => { musicBtn.classList.add('paused'); });
-    currentAudio = null;
+  if (audioEl && !audioEl.paused && gainNode) {
+    gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(gainNode.gain.value, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8);
+    setTimeout(() => {
+      audioEl.pause();
+      musicBtn.classList.add('paused');
+    }, 900);
   }
   passwordGate.classList.remove('hidden');
   gateWord.value = '';
@@ -1267,7 +1284,10 @@ function renderChapter(index) {
   // 章节指定初始音量
   if (ch.theme.initialVolume !== undefined) {
     volumeSlider.value = ch.theme.initialVolume;
-    if (currentAudio) currentAudio.volume = ch.theme.initialVolume / 100;
+    if (gainNode) {
+      gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(ch.theme.initialVolume / 100, audioCtx.currentTime);
+    }
   }
 
   fadeToMusic(ch.music, ch);
@@ -1315,7 +1335,10 @@ musicBtn.addEventListener('click', () => {
 });
 
 volumeSlider.addEventListener('input', function() {
-  if (currentAudio) currentAudio.volume = this.value / 100;
+  if (gainNode) {
+    gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+    gainNode.gain.setValueAtTime(this.value / 100, audioCtx.currentTime);
+  }
 });
 
 // ===== 我的大学滚动到底 → 闪烁提示 =====
@@ -1346,9 +1369,20 @@ const playOverlay = document.getElementById('play-overlay');
 playOverlay.addEventListener('click', function startMusic() {
   playOverlay.classList.add('hidden');
   const ch = chapters[currentChapter];
-  if (ch.music && currentAudio && currentAudio.paused) {
-    currentAudio.play().then(() => musicBtn.classList.remove('paused')).catch(() => {});
-  } else if (ch.music && !currentAudio) {
+  // ★ 用户手势：resume AudioContext + play
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().then(() => {
+      if (audioEl && gainNode) {
+        const t = volumeSlider.value / 100;
+        gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(t, audioCtx.currentTime + 1.5);
+      }
+    });
+  }
+  if (ch.music && audioEl && audioEl.paused) {
+    audioEl.play().then(() => musicBtn.classList.remove('paused')).catch(() => {});
+  } else if (ch.music && !audioEl) {
     fadeToMusic(ch.music, ch);
   }
 }, { once: true });
