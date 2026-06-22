@@ -372,7 +372,7 @@ const chapters = [
       navBg: "#eae5da", cardBg: "rgba(255,255,255,0.45)",
       borderColor: "rgba(0,0,0,0.08)", borderHover: "rgba(0,0,0,0.2)"
     },
-    music: "music-preface.mp3",
+    music: "https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev/music-preface.mp3",
     musicLabel: "conjoined (interlude)",
     content: [
       "很高兴妳能打开这封信",
@@ -397,7 +397,7 @@ const chapters = [
       deco: "radial-gradient(ellipse at 80% 30%, rgba(220,160,100,0.18) 0%, rgba(200,130,80,0.08) 30%, transparent 60%), linear-gradient(180deg, rgba(180,140,100,0.06) 0%, rgba(200,150,100,0.1) 50%, rgba(180,120,80,0.04) 100%)",
       initialVolume: 15
     },
-    music: "LOST-BOY.mp3",
+    music: "https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev/LOST-BOY.mp3",
     musicLabel: "LOST BOY",
     content: [
       { h: "<strong>致出现在我青春的你：</strong>", c: "salutation" },
@@ -434,7 +434,7 @@ const chapters = [
         ]
       }
     },
-    music: "虚拟.mp3",
+    music: "https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev/虚拟.mp3",
     musicLabel: "虚拟",
     content: [
       { h: "\"童年\"", c: "section-heading" },
@@ -507,7 +507,7 @@ const chapters = [
         ]
       }
     },
-    music: "Empty-Ray-LaMontagne.mp3",
+    music: "https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev/Empty-Ray-LaMontagne.mp3",
     musicLabel: "Empty — Ray LaMontagne",
     content: [
       { h: "\"在人间\"", c: "section-heading" },
@@ -555,7 +555,7 @@ const chapters = [
         ]
       }
     },
-    music: "太聪明.mp3",
+    music: "https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev/太聪明.mp3",
     musicLabel: "太聪明",
     content: [
       { h: "\"我的大学\"", c: "section-heading" },
@@ -590,7 +590,7 @@ const chapters = [
       hideNav: true,
       compact: true
     },
-    music: "her.mp3",
+    music: "https://pub-062cd22d0ea64348a193ad666086c28f.r2.dev/her.mp3",
     musicLabel: "her",
     content: [
       { h: "人总应该带着点浪漫活着，回味也总会有些甘甜。", c: "centered" },
@@ -1157,23 +1157,8 @@ function fadeToMusic(src, ch, callback) {
     }, 50);
   };
 
-  if (cached) {
-    // Blob 缓存秒播
-    doCrossfade();
-  } else {
-    // 流式：等缓冲够了再交叉渐变
-    let canplayFired = false;
-    a.addEventListener('canplay', () => {
-      if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-      if (canplayFired) return;
-      canplayFired = true;
-      clearTimeout(canplayFallback);
-      doCrossfade();
-    });
-    const canplayFallback = setTimeout(() => {
-      if (!canplayFired) { canplayFired = true; doCrossfade(); }
-    }, 10000);
-  }
+  // 直接交叉渐变，不等待（旧音乐继续播，新音乐立即淡入）
+  doCrossfade();
 
   // ── 播放中途缓冲耗尽 ──
   a.addEventListener('waiting', () => {
