@@ -980,6 +980,7 @@ let currentAudio = null;
 let musicFadeTimer = null;
 let musicLoadId = 0;
 let musicTimeoutId = null;
+let fadingOutAudio = null; // 追踪正在淡出的音频，防止 clearInterval 后残留
 
 // ===== DOM =====
 const chapterView = document.getElementById('chapter-view');
@@ -1047,6 +1048,10 @@ function applyTheme(theme) {
 function fadeToMusic(src, ch, callback) {
   if (musicTimeoutId) { clearTimeout(musicTimeoutId); musicTimeoutId = null; }
   clearInterval(musicFadeTimer);
+  // ★ 立刻停掉上一次被 clearInterval 中断后残留的淡出音频
+  if (fadingOutAudio) {
+    fadingOutAudio.pause(); fadingOutAudio.src = ''; fadingOutAudio = null;
+  }
   musicLoadId++;
   const thisLoadId = musicLoadId;
 
@@ -1054,19 +1059,20 @@ function fadeToMusic(src, ch, callback) {
   if (currentAudio && !currentAudio.paused) {
     const old = currentAudio;
     currentAudio = null;
+    fadingOutAudio = old;
     let vol = old.volume;
     const fadeStep = Math.max(vol / 18, 0.01);
     musicFadeTimer = setInterval(() => {
       if (thisLoadId !== musicLoadId) {
         clearInterval(musicFadeTimer);
-        old.pause(); old.src = '';
+        old.pause(); old.src = ''; fadingOutAudio = null;
         return;
       }
       vol = Math.max(0, vol - fadeStep);
       old.volume = vol;
       if (vol <= 0) {
         clearInterval(musicFadeTimer);
-        old.pause(); old.src = '';
+        old.pause(); old.src = ''; fadingOutAudio = null;
       }
     }, 40);
   } else if (currentAudio) {
