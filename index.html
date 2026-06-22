@@ -1126,6 +1126,10 @@ function fadeToMusic(src, ch, callback) {
   const startPlay = () => {
     if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
     musicTimeoutId = null;
+    // 防御：停掉上一个 canplay 可能已启动的旧音频（快速切换时残留）
+    if (currentAudio && currentAudio !== a) {
+      currentAudio.pause(); currentAudio.src = '';
+    }
     a.play().catch(() => {});
     currentAudio = a;
     musicBtn.classList.remove('loading', 'buffering');
