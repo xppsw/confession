@@ -270,7 +270,9 @@
   #music-btn:hover { background: rgba(0,0,0,0.06); }
   #music-btn.paused { opacity: 0.4; }
   #music-btn.loading { opacity: 0.6; animation: music-pulse 0.8s ease-in-out infinite; }
+  #music-btn.buffering { opacity: 0.7; animation: music-buf 0.5s ease-in-out infinite; }
   @keyframes music-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.8; } }
+  @keyframes music-buf { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.9; } }
   #volume-slider {
     -webkit-appearance: none; appearance: none;
     width: 70px; height: 2px; background: rgba(0,0,0,0.12);
@@ -1083,14 +1085,14 @@ function fadeToMusic(src, ch, callback) {
   a.loop = true; a.volume = 0;
   a.preload = 'auto';
   a.crossOrigin = 'anonymous';
+  let startedPlaying = false;
 
   const doPlay = () => {
     if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-    musicTimeoutId = null;
     if (canplayFallback) { clearTimeout(canplayFallback); canplayFallback = null; }
-    a.play().catch(() => {});
+    a.play().then(() => { startedPlaying = true; }).catch(() => {});
     currentAudio = a;
-    musicBtn.classList.remove('loading');
+    musicBtn.classList.remove('loading', 'buffering');
     let v = 0;
     const target = volumeSlider.value / 100;
     const step = Math.max(target / 30, 0.005);
@@ -1102,38 +1104,44 @@ function fadeToMusic(src, ch, callback) {
     }, 50);
   };
 
-  // 等待足够缓冲再播放（canplay 保证至少能开始播放不卡顿）
-  // 加 8 秒超时兜底，防止 canplay 因网络问题永远不触发
+  // ── canplay 就开播（快），10s 兜底 ──
   let canplayFallback = null;
+  let started = false;
   const onReady = () => {
     if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-    if (musicTimeoutId) return; // already scheduled
-    musicTimeoutId = setTimeout(doPlay, 100);
+    if (started) return;
+    started = true;
+    doPlay();
   };
-
   a.addEventListener('canplay', onReady, { once: true });
-  // 兜底：8 秒后无论如何都播
-  canplayFallback = setTimeout(() => {
-    if (thisLoadId !== musicLoadId) { a.pause(); a.src = ''; return; }
-    if (!currentAudio || currentAudio !== a) {
-      a.removeEventListener('canplay', onReady);
-      onReady();
-    }
-  }, 8000);
+  canplayFallback = setTimeout(() => { if (!started) onReady(); }, 10000);
 
-  // 错误处理：加载失败时给出提示
+  // ── 播放中途缓冲耗尽 → 浏览器自动暂停/恢复，我只管状态 ──
+  a.addEventListener('waiting', () => {
+    if (thisLoadId !== musicLoadId) return;
+    if (startedPlaying) musicBtn.classList.add('buffering');
+  });
+  a.addEventListener('playing', () => {
+    if (thisLoadId !== musicLoadId) return;
+    musicBtn.classList.remove('buffering');
+  });
+  a.addEventListener('suspend', () => {
+    // 浏览器主动暂停下载（缓冲够了），说明当前不卡
+    if (thisLoadId !== musicLoadId) return;
+    musicBtn.classList.remove('buffering');
+  });
+
+  // 错误处理
   a.addEventListener('error', () => {
     if (thisLoadId !== musicLoadId) return;
     clearTimeout(canplayFallback);
-    musicBtn.classList.remove('loading');
+    musicBtn.classList.remove('loading', 'buffering');
     musicBtn.classList.add('paused');
     console.warn('音乐加载失败:', src);
-    // 尝试继续，不阻塞页面
     currentAudio = null;
     if (callback) callback();
   }, { once: true });
 
-  // 加载中状态
   musicBtn.classList.add('loading');
   a.src = src;
   a.load();
